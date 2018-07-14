@@ -39,10 +39,11 @@ DEFAULT_PREFIX_FORMAT = r'%Y-%m-%d--%H-%M-%S-UTC_'
 
 
 def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=False, prepend_date=True, basename=None,
-                        output_directory=os.getcwd(), exclude_dbs=None, compression='none', prefix_format=None,
+                        output_directory=os.getcwd(), exclude_dbs=None, include_dbs=None, compression='none', prefix_format=None,
                         timeout=60, http_auth=None, **kwargs):
     prefix_format = prefix_format or DEFAULT_PREFIX_FORMAT
     exclude_dbs = exclude_dbs.split(',') or []
+    include_dbs = include_dbs.split(',') or []
     encoding = '' if compression == 'gzip' else 'gzip'
 
     g = grab.Grab(encoding=encoding, timeout=timeout)
@@ -52,7 +53,7 @@ def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=F
 
     g.doc.set_input_by_id('input_username', user)
     g.doc.set_input_by_id('input_password', password)
-    g.doc.submit()
+    g.submit()
 
     try:
         g.doc.text_assert('server_export.php')
@@ -62,12 +63,13 @@ def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=F
     g.go(export_url)
 
     dbs_available = [option.attrib['value'] for option in g.doc.form.inputs['db_select[]']]
-    dbs_to_dump = [db_name for db_name in dbs_available if db_name not in exclude_dbs]
+    dbs_to_dump = select_dbs(dbs_available, include=include_dbs, exclude=exclude_dbs)
+
     if not dbs_to_dump:
         print('Warning: no databases to dump (databases available: "{}")'.format('", "'.join(dbs_available)),
             file=sys.stderr)
 
-    file_response = g.doc.submit(
+    file_response = g.submit(
         extra_post=[('db_select[]', db_name) for db_name in dbs_to_dump] + [('compression', compression)])
 
     re_match = CONTENT_DISPOSITION_FILENAME_RE.match(g.response.headers['Content-Disposition'])
@@ -98,6 +100,15 @@ def download_sql_backup(url, user, password, dry_run=False, overwrite_existing=F
 
     return out_filename
 
+def select_dbs(dblist, **kwargs):
+    if kwargs['exclude'][0] != '' and kwargs['include'][0] != '':
+        raise Exception('you can only have one include/exclude argument')
+    elif kwargs['exclude'][0] != '':
+        return [db_name for db_name in dblist if db_name not in kwargs['exclude']]
+    elif kwargs['include'][0] != '':
+        return [db_name for db_name in dblist if db_name in kwargs['include']]
+    else:
+        return dblist
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -113,6 +124,8 @@ if __name__ == '__main__':
         help='prepend current UTC date & time to the filename; see the --prefix-format option for custom formatting')
     parser.add_argument('-e', '--exclude-dbs', default='',
         help='comma-separated list of database names to exclude from the dump')
+    parser.add_argument('-i', '--include-dbs', default='',
+        help='comma-separated list of database names to include from the dump')
     parser.add_argument('--compression', default='none', choices=['none', 'zip', 'gzip'],
         help='compression method for the output file - must be supported by the server (default: %(default)s)')
     parser.add_argument('--basename', default=None,
